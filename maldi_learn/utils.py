@@ -73,48 +73,67 @@ def get_metadata(paths):
     return pd.concat(metadata_files, ignore_index=True)
 
 
-def load_preprocessed(output_paths):
+from concurrent.futures import ThreadPoolExecutor
+
+def parse_single_spectrum(path):
+    try:
+        if "raw" in path and not "raw_end_to_end" in path:
+            file = np.loadtxt(path, skiprows=3, delimiter=" ")
+            file = file[file[:, 0] > 2000]
+            intensity = file[:, 1] ** 0.25
+            rng = intensity.max() - intensity.min()
+            if rng > 0:
+                x = (-1 + 2 * ((intensity - intensity.min()) / rng))[:20000].reshape(1, -1)
+            else:
+                x = intensity[:20000].reshape(1, -1)
+            return x.astype(np.float32)
+
+        # Ultra-fast parser for binned spectra
+        with open(path, 'r', errors='ignore') as f:
+            text = f.read()
+
+        tokens = text.replace(',', ' ').split()
+        try:
+            arr = np.array(tokens, dtype=np.float32)
+        except ValueError:
+            arr = np.fromiter(
+                (float(t) for t in tokens if len(t) > 0 and (t[0].isdigit() or t[0] in '+-.')),
+                dtype=np.float32
+            )
+
+        if len(arr) == 0:
+            return None
+
+        # Handle 2-column formats (mass and intensity)
+        if len(arr) == 12000:
+            arr = arr.reshape(-1, 2)[:, 1]
+
+        rng = arr.max() - arr.min()
+        if rng > 0:
+            x = (-1 + 2 * ((arr - arr.min()) / rng)).reshape(1, -1)
+        else:
+            x = arr.reshape(1, -1)
+
+        return x.astype(np.float32)
+    except Exception:
+        return None
+
+
+def load_preprocessed(output_paths, max_workers=8):
+    paths_list = list(output_paths)
+    print(f"Loading {len(paths_list)} spectra using {max_workers} worker threads...")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(tqdm(executor.map(parse_single_spectrum, paths_list), total=len(paths_list)))
+
     X = []
     successfully_loaded = []
-
-    for path in tqdm(list(output_paths)):
-        try:
-            x = None
-            if "raw" in path and not "raw_end_to_end" in path:
-                file = np.loadtxt(path, skiprows=3, delimiter=" ")
-                file = file[file[:, 0] > 2000, ]
-                intensity = file[:, 1] ** 0.25
-                rng = intensity.max() - intensity.min()
-                if rng > 0:
-                    x = (-1 + 2 * ((intensity - intensity.min()) / rng))[:20000].reshape(1, -1)
-                else:
-                    x = intensity[:20000].reshape(1, -1)
-            else:
-                # binned_6000 or preprocessed file
-                try:
-                    file = np.loadtxt(path)
-                except Exception:
-                    file = pd.read_csv(path, header=None, sep=None, engine='python').values.flatten()
-
-                if file.ndim == 2:
-                    intensity = file[:, 1] if file.shape[1] > 1 else file[:, 0]
-                else:
-                    intensity = file
-
-                rng = intensity.max() - intensity.min()
-                if rng > 0:
-                    x = (-1 + 2 * ((intensity - intensity.min()) / rng)).reshape(1, -1)
-                else:
-                    x = intensity.reshape(1, -1)
-
-            if x is not None and x.shape[1] > 0:
-                X.append(x)
-                successfully_loaded.append(True)
-            else:
-                successfully_loaded.append(False)
-        except Exception:
+    for res in results:
+        if res is not None and res.shape[1] > 0:
+            X.append(res)
+            successfully_loaded.append(True)
+        else:
             successfully_loaded.append(False)
-            continue
 
     if len(X) == 0:
         raise ValueError(f"Could not load any spectrum arrays from {len(output_paths)} files.")
