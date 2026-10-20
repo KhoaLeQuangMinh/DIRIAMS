@@ -42,8 +42,21 @@ class DataAnalyzer(MaldiDataModule):
         self.attributions = dict()
         self.best_model_path = None
 
+        if not self.params["output_directory"].endswith("/"):
+            self.params["output_directory"] += "/"
+
         if not os.path.exists(self.params["output_directory"]):
             os.makedirs(self.params["output_directory"])
+
+        # Auto-adjust fc1_nodes based on feature dimension
+        if len(self.X.shape) >= 3:
+            input_len = self.X.shape[2]
+            l1 = input_len - self.params.get("cnn1_kernel", 60) + 1
+            l2 = (l1 - self.params.get("max_pool_kernel", 30)) // self.params.get("max_pool_stride", 30) + 1
+            expected_fc1 = 4 * l2
+            if self.params.get("fc1_nodes") != expected_fc1:
+                print(f"Auto-adjusting params['fc1_nodes'] from {self.params.get('fc1_nodes')} to {expected_fc1} for input feature length {input_len}")
+                self.params["fc1_nodes"] = expected_fc1
 
 
     def save_config(self):

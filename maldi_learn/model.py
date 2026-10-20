@@ -172,7 +172,12 @@ class backboneModel(nn.Module):
         x = self.conv2(x)
         x = self.bn11(x)
         x = self.activation(x)
-        x = x.reshape(x.shape[0],1, -1)
+        x = x.reshape(x.shape[0], 1, -1)
+
+        # Dynamic check for fc1 input features
+        if x.shape[-1] != self.fc1.in_features:
+            device = next(self.fc1.parameters()).device
+            self.fc1 = nn.Linear(x.shape[-1], 128).to(device)
 
         # Fully connected layer
         x = self.fc1(x)

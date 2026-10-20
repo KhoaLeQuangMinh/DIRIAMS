@@ -1,88 +1,85 @@
-# End-to-end-MALDI
+# DIRIAMS (End-to-End & Binned MALDI-TOF Deep Learning)
 
+This repository provides deep learning models (1D-CNN) and evaluation utilities for predicting antimicrobial resistance (AMR) from MALDI-TOF mass spectrometry data (DRIAMS dataset).
 
-This readme demonstrates how to run the analysis. All results are saved in the parameters output directory. When running the analysis, we used a job scheduler and json files to set the parameters.
+This version supports both:
+- **Raw MALDI-TOF spectra** (length 20,000 m/z data points).
+- **Pre-binned spectra** (e.g. `binned_6000` from Kaggle's `drscarlat/driams` dataset).
+- Auto-adaptation of dense layer dimensions (`fc1_nodes`) based on input feature length (2656 for raw 20,000 points; 792 for 6,000 binned features).
+- Robust directory path parsing (works with or without trailing slashes, across local and Kaggle environments).
 
+---
 
-#### Import modules
+## Running on Kaggle
+
+### 1. Clone this repository in Kaggle
+```bash
+!git clone https://github.com/KhoaLeQuangMinh/DIRIAMS.git
+%cd DIRIAMS
 ```
+
+### 2. Run in a Kaggle Notebook Cell
+```python
+import pytorch_lightning as pl
 from maldi_learn.model import MALDI_1D_CNN, backboneModel
 from maldi_learn.analyzer import DataAnalyzer
 from maldi_learn.utils import load_all_data
-import pytorch_lightning as pl
-import sys
-```
 
-#### Set parameters
-```
 # Set seed
 pl.seed_everything(1)
 
-# Get parameters and prefixes
+# Training parameters
 parameters = { 
-    "output_directory":"./results_random_end_to_end/",
-    "task":"multilabel", # multiclass, multilabel or binary 
-    "num_classes":28, 
-    "num_workers":4, 
-    "batch_size":128, 
-    "lr":0.005, 
-    "optimizer":"Adam", 
-    "epochs":100,
-    "problem":"antibiotic",
-    "cnn1_kernel":60, 
-    "fc1_nodes":2656, 
-    "max_pool_kernel":30, 
-    "max_pool_stride":30, 
-    "dropout":0.3,
-    "sampling":"random" #random, DRIAMS-A, or DRIAMS-B
-    }
+    "output_directory": "./results_driams/",
+    "task": "multilabel",            # multiclass, multilabel or binary 
+    "num_classes": 28, 
+    "num_workers": 2, 
+    "batch_size": 128, 
+    "lr": 0.005, 
+    "optimizer": "Adam", 
+    "epochs": 50,
+    "problem": "antibiotic",
+    "cnn1_kernel": 60, 
+    "fc1_nodes": 792,                # Auto-adapted to 792 for binned_6000 or 2656 for raw
+    "max_pool_kernel": 30, 
+    "max_pool_stride": 30, 
+    "dropout": 0.3,
+    "sampling": "random"             # random, DRIAMS-A, or DRIAMS-B
+}
 
-
-
+# Prefixes for Kaggle dataset (drscarlat/driams)
 prefixes = [
-    "/faststorage/project/amr_driams/data/DRIAMS-B/", # Unzipped data folders from the DRIAMS database
-    "/faststorage/project/amr_driams/data/DRIAMS-C/", 
-    "/faststorage/project/amr_driams/data/DRIAMS-D/", 
-    "/faststorage/project/amr_driams/data/DRIAMS-A/"]
-```
+    "/kaggle/input/datasets/drscarlat/driams/DRIAMS-B",
+    "/kaggle/input/datasets/drscarlat/driams/DRIAMS-C", 
+    "/kaggle/input/datasets/drscarlat/driams/DRIAMS-D", 
+    "/kaggle/input/datasets/drscarlat/driams/DRIAMS-A"
+]
 
-#### Load the data
-```
+# 1. Load metadata & spectra
 metadata, X = load_all_data(prefixes)
+
+# 2. Setup analyzer and DataModule
 analysis = DataAnalyzer(X, metadata, parameters)
 analysis.setup()
-```
 
-#### Instantialize pytorch lightning model and callbacks
-```
+# 3. Instantiate model
 model = MALDI_1D_CNN(
     backbone = backboneModel, 
     classes  = analysis.params["num_classes"], 
     params   = analysis.params, 
     learning_rate = analysis.params["lr"],
-    cosine_t_max  = analysis.params["epochs"]*len(analysis.train_dataloader())
+    cosine_t_max  = analysis.params["epochs"] * len(analysis.train_dataloader())
 )
 
 callbacks = [
-    pl.callbacks.EarlyStopping(monitor="val_loss", patience=50, mode="min"),
+    pl.callbacks.EarlyStopping(monitor="val_loss", patience=20, mode="min"),
     pl.callbacks.ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=3),
     pl.callbacks.LearningRateMonitor(logging_interval="epoch"),
 ]
-```
 
-#### Train the model
-```
+# 4. Train the model
 analysis.train(model, callbacks)
-```
 
-#### Get the predictions (saved in the output directory)
-```
+# 5. Evaluate and save predictions
 analysis.evaluate()
-```
-
-#### Get the attributions
-```
-if parameters["sampling"] != "kfold":
-    # Get the attributions
-    analysis.get_attributions(n_baselines=500, targets=[9, 7, 4])
 ```
